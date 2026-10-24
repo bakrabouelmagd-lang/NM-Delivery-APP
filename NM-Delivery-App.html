@@ -1419,151 +1419,57 @@ const _lsDel = (k) => { try { localStorage.removeItem(k); } catch(e) {} };
   </script>
 
 <script>
-const JBIN_MASTER = '$2a$10$11SLnIc1IyO4Q0dAInCAXujB09/C6LtkcX19wK1SC8ncVyNrS4kja';
-const JBIN_SHOPS  = '6aa53563ffd5d16053fdc058';
-const JBIN_ORDERS = '6aa535c1ac6210605ac42be7';
-// BIN للمستخدمين — مشترك (ثابت عشان كل الأجهزة تشوف بعضها)
-// لو فضي: افتح التطبيق على جهاز البائع أول ← هيتعمل تلقائي ← انقل الـ ID هنا
-const JBIN_USERS_FIXED = ''; // ← ضع هنا users bin ID بعد أول تشغيل
-let JBIN_USERS = JBIN_USERS_FIXED || localStorage.getItem('NM_users_bin_id_shared') || localStorage.getItem('NM_users_bin_id') || '';
-const JBIN_BASE   = 'https://api.jsonbin.io/v3/b';
+// ===== Firebase Realtime Database =====
+const FB_BASE = 'https://nm-delivry-app-default-rtdb.firebaseio.com';
 
-const JBIN_HEADERS = {
-  'Content-Type': 'application/json',
-  'X-Master-Key': JBIN_MASTER,
-  'X-Bin-Meta': 'false'
-};
-
-// إنشاء BIN للمستخدمين تلقائياً لو مش موجود
-async function ensureUsersBin(){
-  if(JBIN_USERS) return JBIN_USERS;
-  try{
-    // أولاً: دور على bins موجودة اسمها NM-users
-    try{
-      const listR = await fetch('https://api.jsonbin.io/v3/b?meta=true', {
-        headers: JBIN_HEADERS
-      });
-      if(listR.ok){
-        const listD = await listR.json();
-        const bins = Array.isArray(listD) ? listD : (listD.bins || []);
-        const found = bins.find(b=>b.name==='NM-users-shared'||b.name==='NM-users');
-        if(found?.id){
-          JBIN_USERS = found.id;
-          localStorage.setItem('NM_users_bin_id_shared', JBIN_USERS);
-          localStorage.setItem('NM_users_bin_id', JBIN_USERS);
-          return JBIN_USERS;
-        }
-      }
-    }catch(e2){}
-    // ثانياً: إنشاء جديد
-    const r = await fetch('https://api.jsonbin.io/v3/b', {
-      method:'POST',
-      headers:{...JBIN_HEADERS, 'X-Bin-Name':'NM-users-shared'},
-      body: JSON.stringify({})
-    });
-    if(r.ok){
-      const d = await r.json();
-      JBIN_USERS = d.metadata?.id || d.record?.id || '';
-      if(JBIN_USERS){
-        localStorage.setItem('NM_users_bin_id_shared', JBIN_USERS);
-        localStorage.setItem('NM_users_bin_id', JBIN_USERS);
-        // عرض الـ ID للأدمن عشان يحطه في الكود
-        console.log('%c[NM] Users Bin ID: ' + JBIN_USERS, 'color:gold;font-size:14px;font-weight:bold');
-      }
-    }
-  }catch(e){}
-  return JBIN_USERS;
-}
-
-// تحديد BIN المناسب
-function getBinId(path){
-  if(path.startsWith('/orders')) return JBIN_ORDERS;
-  if(path.startsWith('/users')) return JBIN_USERS;
-  return JBIN_SHOPS;
-}
-function getBasePath(path){
-  if(path.startsWith('/orders')) return '/orders';
-  if(path.startsWith('/users')) return '/users';
-  return '/shops';
-}
-
-// جلب البيانات
+// جلب البيانات من Firebase
 async function fbGet(path){
   try{
-    if(path.startsWith('/users')) await ensureUsersBin();
-    const binId = getBinId(path);
-    if(!binId) return null;
-    const r = await fetch(`${JBIN_BASE}/${binId}/latest`, { headers: JBIN_HEADERS });
+    const r = await fetch(`${FB_BASE}${path}.json`);
     if(!r.ok) return null;
-    const data = await r.json();
-    const base = getBasePath(path);
-    if(path === base) return data;
-    const key = path.replace(base+'/','');
-    return data[key]||null;
-  }catch(e){ return null; }
+    return await r.json();
+  }catch(e){ console.error('[NM] fbGet error:', e); return null; }
 }
 
-// حفظ البيانات كاملة
+// حفظ/تحديث بيانات في Firebase
 async function fbSet(path, data){
   try{
-    if(path.startsWith('/users')) await ensureUsersBin();
-    const binId = getBinId(path);
-    if(!binId) return false;
-    const base = getBasePath(path);
-    const current = await fbGet(base) || {};
-    if(path === base){
-      await fetch(`${JBIN_BASE}/${binId}`, {
-        method:'PUT', headers: JBIN_HEADERS,
-        body: JSON.stringify(data||{})
-      });
-    } else {
-      const key = path.replace(base+'/','');
-      if(data === null){ delete current[key]; }
-      else { current[key] = data; }
-      await fetch(`${JBIN_BASE}/${binId}`, {
-        method:'PUT', headers: JBIN_HEADERS,
-        body: JSON.stringify(current)
-      });
-    }
-    return true;
-  }catch(e){ return false; }
+    const method = data === null ? 'DELETE' : 'PUT';
+    const opts = { method, headers:{'Content-Type':'application/json'} };
+    if(data !== null) opts.body = JSON.stringify(data);
+    const r = await fetch(`${FB_BASE}${path}.json`, opts);
+    return r.ok;
+  }catch(e){ console.error('[NM] fbSet error:', e); return false; }
 }
 
-// تحديث جزئي
+// تحديث جزئي في Firebase
 async function fbPatch(path, updates){
   try{
-    if(path.startsWith('/users')) await ensureUsersBin();
-    const binId = getBinId(path);
-    if(!binId) return false;
-    const base = getBasePath(path);
-    const key = path.replace(base+'/','');
-    const current = await fbGet(base) || {};
-    if(current[key]){ current[key] = {...current[key], ...updates}; }
-    await fetch(`${JBIN_BASE}/${binId}`, {
-      method:'PUT', headers: JBIN_HEADERS,
-      body: JSON.stringify(current)
+    const r = await fetch(`${FB_BASE}${path}.json`, {
+      method:'PATCH',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(updates)
     });
-    return true;
-  }catch(e){ return false; }
+    return r.ok;
+  }catch(e){ console.error('[NM] fbPatch error:', e); return false; }
 }
 
-// إضافة عنصر جديد
+// إضافة عنصر جديد في Firebase
 async function fbPush(path, data){
   try{
-    if(path.startsWith('/users')) await ensureUsersBin();
-    const binId = getBinId(path);
-    if(!binId) return null;
-    const base = getBasePath(path);
-    const current = await fbGet(base) || {};
     const key = 'nm_'+Date.now()+'_'+Math.random().toString(36).substr(2,5);
-    current[key] = {...data, firebaseKey: key};
-    await fetch(`${JBIN_BASE}/${binId}`, {
-      method:'PUT', headers: JBIN_HEADERS,
-      body: JSON.stringify(current)
+    const d = {...data, firebaseKey: key};
+    const r = await fetch(`${FB_BASE}${path}/${key}.json`, {
+      method:'PUT',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(d)
     });
-    return key;
-  }catch(e){ return null; }
+    return r.ok ? key : null;
+  }catch(e){ console.error('[NM] fbPush error:', e); return null; }
 }
+
+// دالة وهمية للتوافق مع الكود القديم
+async function ensureUsersBin(){ return true; }
 
 // ====== مزامنة المستخدمين بين الأجهزة ======
 let _syncingUsers = false;
@@ -4383,32 +4289,32 @@ function saveAllShops(shops){
 
 // جلب المحلات من Firebase وتحديث الشاشة
 async function watchShops(){
-  try{
-    const shops = await fbGet('/shops');
-    if(shops && typeof shops === 'object' && Object.keys(shops).length > 0){
-      try{ localStorage.setItem(SELLER_SHOPS_KEY, JSON.stringify(shops)); }catch(e){}
-      // دايماً حدّث الشاشة بعد ما نجيب المطاعم من الكلاود
-      try{ if(typeof buildHome==='function') buildHome(); }catch(e){}
-    }
-  }catch(e){}
-  // بولينج كل 5 ثواني
-  setInterval(async ()=>{
+  async function fetchAndApply(){
     try{
       const shops = await fbGet('/shops');
-      if(!shops) return;
-      const localRaw = localStorage.getItem(SELLER_SHOPS_KEY)||'{}';
+      if(!shops || typeof shops !== 'object'){ return false; }
+      const keys = Object.keys(shops);
+      if(keys.length === 0){ return false; }
       const newStr = JSON.stringify(shops);
-      if(newStr !== localRaw && Object.keys(shops).length > 0){
-        localStorage.setItem(SELLER_SHOPS_KEY, newStr);
+      const oldStr = localStorage.getItem(SELLER_SHOPS_KEY)||'{}';
+      if(newStr !== oldStr){
+        try{ localStorage.setItem(SELLER_SHOPS_KEY, newStr); }catch(e){}
         try{ if(typeof buildHome==='function') buildHome(); }catch(e){}
       }
-    }catch(e){}
-  }, 5000);
+      return true;
+    }catch(e){ console.error('[NM] watchShops error:', e); return false; }
+  }
+  await fetchAndApply();
+  setInterval(fetchAndApply, 6000);
 }
 
-// حفظ محل بائع واحد على Firebase
-function saveShopToFirebase(shop){
-  fbSet('/shops/'+shop.id, shop);
+// حفظ محل بائع واحد على Cloud
+async function saveShopToFirebase(shop){
+  console.log('[NM] رفع المطعم للكلاود:', shop.id, shop.name);
+  const ok = await fbSet('/shops/'+shop.id, shop);
+  console.log('[NM] نتيجة الرفع:', ok ? '✅ نجح' : '❌ فشل');
+  if(ok) showToast('☁️ تم نشر المطعم على الكلاود','green');
+  else showToast('⚠️ تعذّر الرفع للكلاود — محفوظ محلياً فقط','red');
 }
 
 // مراقبة الطلبات للبائع (بولينج كل 5 ثواني)
@@ -5033,8 +4939,24 @@ function doRegister(){
     if(!verifySellerCode(enteredCode)){
       err.textContent='❌ الرقم السري غلط — تواصل مع صاحب المنصة للحصول على الرقم الصحيح';
       err.style.display='block';
-      // مسح الخانة عشان يكتب تاني
       if(codeInp) codeInp.value='';
+      return;
+    }
+  }
+
+  // ✅ التحقق من كود السائق — إلزامي
+  if(selectedRole==='driver' && !ownerAccess){
+    const driverCodeInp=document.getElementById('r-driver-code');
+    const enteredDriverCode=(driverCodeInp?.value||'').trim();
+    if(!enteredDriverCode){
+      err.textContent='❌ من فضلك ادخل الرقم السري الخاص بالسائقين';
+      err.style.display='block';
+      return;
+    }
+    if(typeof isDriverCode==='function' && !isDriverCode(enteredDriverCode)){
+      err.textContent='❌ الرقم السري للسائقين غلط — تواصل مع صاحب المنصة';
+      err.style.display='block';
+      if(driverCodeInp) driverCodeInp.value='';
       return;
     }
   }
@@ -7573,6 +7495,8 @@ function adminAddFromSheet(){
       <div class="d-tab" onclick="driverTab(this,'d-orders-panel')">📦 الطلبات</div>
       <div class="d-tab" onclick="driverTab(this,'d-hours-panel')">🕐 مواعيدي</div>
       <div class="d-tab" onclick="driverTab(this,'d-earnings-panel')">💰 أرباحي</div>
+      <div class="d-tab" onclick="driverTab(this,'d-profile-panel')">👤 بروفايلي</div>
+      <div class="d-tab" onclick="driverTab(this,'d-chat-panel');renderDriverChat()">💬 شات</div>
     </div>
 
     
@@ -7628,6 +7552,102 @@ function adminAddFromSheet(){
       </div>
       <div id="d-earnings-list">
         <div style="text-align:center;color:var(--g400);font-size:13px;padding:20px">لا يوجد أرباح بعد</div>
+      </div>
+    </div>
+
+    <!-- بروفايل السائق -->
+    <div class="d-panel" id="d-profile-panel">
+      <!-- هيدر البروفايل -->
+      <div style="background:linear-gradient(135deg,#14532d,#16A34A);border-radius:16px;padding:20px;text-align:center;margin-bottom:12px;color:#fff">
+        <div id="d-profile-photo-wrap" style="width:90px;height:90px;border-radius:50%;background:rgba(255,255,255,.2);margin:0 auto 10px;overflow:hidden;display:flex;align-items:center;justify-content:center;font-size:40px;cursor:pointer;border:3px solid rgba(255,255,255,.6);position:relative" onclick="document.getElementById('d-photo-input').click()">
+          <span id="d-profile-photo-emoji">🛵</span>
+          <img id="d-profile-photo-img" src="" style="display:none;width:100%;height:100%;object-fit:cover;position:absolute;top:0;left:0">
+          <div style="position:absolute;bottom:0;left:0;right:0;background:rgba(0,0,0,.4);font-size:10px;padding:2px;text-align:center">📷</div>
+        </div>
+        <input type="file" id="d-photo-input" accept="image/*" style="display:none" onchange="driverUploadPhoto(this)">
+        <div style="font-size:11px;opacity:.8">اضغط الصورة لتغييرها</div>
+      </div>
+
+      <!-- بيانات أساسية -->
+      <div style="background:#fff;border-radius:14px;padding:16px;box-shadow:0 2px 8px rgba(0,0,0,.06);margin-bottom:10px">
+        <div style="font-size:12px;font-weight:800;color:#16A34A;margin-bottom:12px">📋 البيانات الأساسية</div>
+        <div style="margin-bottom:10px">
+          <label style="font-size:11px;font-weight:800;color:#555;display:block;margin-bottom:3px">الاسم الكامل</label>
+          <input id="d-profile-name" class="inp" placeholder="اسمك الكامل" style="width:100%;box-sizing:border-box">
+        </div>
+        <div style="margin-bottom:10px">
+          <label style="font-size:11px;font-weight:800;color:#555;display:block;margin-bottom:3px">رقم الهاتف</label>
+          <input id="d-profile-phone" class="inp" placeholder="+20xxxxxxxxxx" type="tel" style="width:100%;box-sizing:border-box">
+        </div>
+        <div style="margin-bottom:10px">
+          <label style="font-size:11px;font-weight:800;color:#555;display:block;margin-bottom:3px">المنطقة / المحافظة</label>
+          <input id="d-profile-area" class="inp" placeholder="مثال: القاهرة، المعادي" style="width:100%;box-sizing:border-box">
+        </div>
+      </div>
+
+      <!-- وسيلة التوصيل -->
+      <div style="background:#fff;border-radius:14px;padding:16px;box-shadow:0 2px 8px rgba(0,0,0,.06);margin-bottom:10px">
+        <div style="font-size:12px;font-weight:800;color:#16A34A;margin-bottom:12px">🚗 وسيلة التوصيل</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:12px">
+          <div id="v-moto" onclick="selectVehicle('motorbike')" style="border:2px solid #e0e0e0;border-radius:12px;padding:12px 6px;text-align:center;cursor:pointer;transition:.2s">
+            <div style="font-size:28px;margin-bottom:4px">🏍️</div>
+            <div style="font-size:10px;font-weight:800;color:#555">موتوسيكل</div>
+          </div>
+          <div id="v-car" onclick="selectVehicle('car')" style="border:2px solid #e0e0e0;border-radius:12px;padding:12px 6px;text-align:center;cursor:pointer;transition:.2s">
+            <div style="font-size:28px;margin-bottom:4px">🚗</div>
+            <div style="font-size:10px;font-weight:800;color:#555">عربية</div>
+          </div>
+          <div id="v-scooter" onclick="selectVehicle('scooter')" style="border:2px solid #e0e0e0;border-radius:12px;padding:12px 6px;text-align:center;cursor:pointer;transition:.2s">
+            <div style="font-size:28px;margin-bottom:4px">🛵</div>
+            <div style="font-size:10px;font-weight:800;color:#555">سكوتر</div>
+          </div>
+        </div>
+        <div style="margin-bottom:10px">
+          <label style="font-size:11px;font-weight:800;color:#555;display:block;margin-bottom:3px">رقم اللوحة (اختياري)</label>
+          <input id="d-profile-plate" class="inp" placeholder="مثال: أ ب ج 1234" style="width:100%;box-sizing:border-box">
+        </div>
+      </div>
+
+      <!-- معلومات إضافية -->
+      <div style="background:#fff;border-radius:14px;padding:16px;box-shadow:0 2px 8px rgba(0,0,0,.06);margin-bottom:10px">
+        <div style="font-size:12px;font-weight:800;color:#16A34A;margin-bottom:12px">ℹ️ معلومات إضافية</div>
+        <div style="margin-bottom:10px">
+          <label style="font-size:11px;font-weight:800;color:#555;display:block;margin-bottom:3px">سنوات الخبرة</label>
+          <select id="d-profile-exp" class="inp" style="width:100%;box-sizing:border-box">
+            <option value="">اختر</option>
+            <option value="أقل من سنة">أقل من سنة</option>
+            <option value="1-2 سنة">1-2 سنة</option>
+            <option value="3-5 سنوات">3-5 سنوات</option>
+            <option value="أكثر من 5 سنوات">أكثر من 5 سنوات</option>
+          </select>
+        </div>
+        <div style="margin-bottom:10px">
+          <label style="font-size:11px;font-weight:800;color:#555;display:block;margin-bottom:3px">نبذة عنك (اختياري)</label>
+          <textarea id="d-profile-bio" class="inp" placeholder="أي معلومة إضافية تريد إضافتها..." style="width:100%;box-sizing:border-box;height:60px;resize:none"></textarea>
+        </div>
+      </div>
+
+      <button onclick="saveDriverProfile()" style="width:100%;padding:14px;background:linear-gradient(135deg,#14532d,#16A34A);color:#fff;border:none;border-radius:12px;font-family:'Cairo',sans-serif;font-size:15px;font-weight:800;cursor:pointer;box-shadow:0 4px 12px rgba(22,163,74,.3)">💾 حفظ البروفايل</button>
+    </div>
+
+    <!-- شات السائق -->
+    <div class="d-panel" id="d-chat-panel">
+      <div id="d-chat-conversations">
+        <div style="text-align:center;color:var(--g400);font-size:13px;padding:30px 0">
+          <div style="font-size:36px;margin-bottom:8px">💬</div>
+          لا توجد محادثات بعد
+        </div>
+      </div>
+      <div id="d-chat-window" style="display:none">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
+          <button onclick="document.getElementById('d-chat-window').style.display='none';document.getElementById('d-chat-conversations').style.display='block'" style="background:#f0f0f0;border:none;border-radius:8px;padding:8px 12px;font-family:'Cairo',sans-serif;font-size:13px;font-weight:700;cursor:pointer">➡️ رجوع</button>
+          <div id="d-chat-with-name" style="font-size:13px;font-weight:800;flex:1"></div>
+        </div>
+        <div id="d-chat-messages" style="background:#f9f9f9;border-radius:12px;padding:12px;min-height:200px;max-height:340px;overflow-y:auto;margin-bottom:10px"></div>
+        <div style="display:flex;gap:8px">
+          <input id="d-chat-input" class="inp" placeholder="اكتب رسالة..." style="flex:1" onkeydown="if(event.key==='Enter')sendDriverChatMsg()">
+          <button onclick="sendDriverChatMsg()" style="padding:10px 18px;background:#16A34A;color:#fff;border:none;border-radius:10px;font-family:'Cairo',sans-serif;font-size:16px;font-weight:800;cursor:pointer">➤</button>
+        </div>
       </div>
     </div>
 
@@ -8777,5 +8797,307 @@ body[data-role="owner"]  .tab-btn.on { color: var(--c-gold) !important; }
   *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
 }
 </style>
+
+<!-- ======= بروفايل السائق + نظام الشات ======= -->
+<script>
+// ==================== بروفايل السائق ====================
+
+let _selectedVehicle = '';
+
+function selectVehicle(type){
+  _selectedVehicle = type;
+  ['motorbike','car','scooter'].forEach(v=>{
+    const el=document.getElementById('v-'+{motorbike:'moto',car:'car',scooter:'scooter'}[v]);
+    if(el){
+      el.style.border = v===type ? '2px solid #16A34A' : '2px solid #e0e0e0';
+      el.style.background = v===type ? '#F0FDF4' : '#fff';
+    }
+  });
+}
+
+function loadDriverProfile(){
+  if(!currentUser) return;
+  const nameEl=document.getElementById('d-profile-name');
+  const phoneEl=document.getElementById('d-profile-phone');
+  const areaEl=document.getElementById('d-profile-area');
+  const bioEl=document.getElementById('d-profile-bio');
+  const plateEl=document.getElementById('d-profile-plate');
+  const expEl=document.getElementById('d-profile-exp');
+  if(nameEl) nameEl.value=currentUser.name||'';
+  if(phoneEl) phoneEl.value=currentUser.driverPhone||'';
+  if(areaEl) areaEl.value=currentUser.driverArea||'';
+  if(bioEl) bioEl.value=currentUser.driverBio||'';
+  if(plateEl) plateEl.value=currentUser.driverPlate||'';
+  if(expEl) expEl.value=currentUser.driverExp||'';
+  // وسيلة التوصيل
+  if(currentUser.driverVehicle) selectVehicle(currentUser.driverVehicle);
+  // الصورة
+  const img=document.getElementById('d-profile-photo-img');
+  const emoji=document.getElementById('d-profile-photo-emoji');
+  if(currentUser.driverPhoto && img && emoji){
+    img.src=currentUser.driverPhoto;
+    img.style.display='block';
+    emoji.style.display='none';
+  }
+}
+
+function driverUploadPhoto(input){
+  const file=input.files[0];
+  if(!file) return;
+  if(file.size>2*1024*1024){ showToast('الصورة كبيرة جداً، الحد 2MB','red'); return; }
+  const reader=new FileReader();
+  reader.onload=e=>{
+    const img=document.getElementById('d-profile-photo-img');
+    const emoji=document.getElementById('d-profile-photo-emoji');
+    if(img){ img.src=e.target.result; img.style.display='block'; }
+    if(emoji) emoji.style.display='none';
+  };
+  reader.readAsDataURL(file);
+}
+
+async function saveDriverProfile(){
+  if(!currentUser){ showToast('سجل دخولك أولاً','red'); return; }
+  const name=(document.getElementById('d-profile-name')?.value||'').trim();
+  const phone=(document.getElementById('d-profile-phone')?.value||'').trim();
+  const area=(document.getElementById('d-profile-area')?.value||'').trim();
+  const bio=(document.getElementById('d-profile-bio')?.value||'').trim();
+  const plate=(document.getElementById('d-profile-plate')?.value||'').trim();
+  const exp=(document.getElementById('d-profile-exp')?.value||'').trim();
+  const img=document.getElementById('d-profile-photo-img');
+  const photo=(img && img.src && img.src.startsWith('data:')) ? img.src : (currentUser.driverPhoto||'');
+  if(!name){ showToast('من فضلك ادخل الاسم','red'); return; }
+  if(!_selectedVehicle){ showToast('من فضلك اختر وسيلة التوصيل','red'); return; }
+  const vehicleLabel={motorbike:'موتوسيكل 🏍️', car:'عربية 🚗', scooter:'سكوتر 🛵'};
+  const updates={
+    name,
+    driverPhone: phone,
+    driverArea: area,
+    driverBio: bio,
+    driverPlate: plate,
+    driverExp: exp,
+    driverVehicle: _selectedVehicle,
+    driverVehicleLabel: vehicleLabel[_selectedVehicle]||_selectedVehicle,
+    driverPhoto: photo
+  };
+  Object.assign(currentUser, updates);
+  // حفظ في localStorage
+  try{
+    const usersStr=localStorage.getItem('NM_users_v1');
+    if(usersStr){
+      const users=JSON.parse(usersStr);
+      const idx=users.findIndex(u=>u.id===currentUser.id);
+      if(idx>=0){ Object.assign(users[idx], updates); localStorage.setItem('NM_users_v1',JSON.stringify(users)); }
+    }
+  }catch(e){}
+  // حفظ في Firebase
+  await fbPatch('/users/'+currentUser.id, updates);
+  // تحديث الاسم في الهيدر
+  const nameTop=document.getElementById('driver-name-top');
+  if(nameTop) nameTop.textContent=(vehicleLabel[_selectedVehicle]||'🛵')+' '+name;
+  showToast('✅ تم حفظ البروفايل','green');
+}
+
+// ==================== نظام الشات ====================
+let _chatCurrentThread = null; // { threadId, withUserId, withName }
+
+function chatThreadId(uid1, uid2){
+  // ترتيب ثابت عشان الـ ID يكون نفسه من الاتجاهين
+  return [uid1, uid2].sort().join('__');
+}
+
+async function renderDriverChat(){
+  if(!currentUser) return;
+  const container=document.getElementById('d-chat-conversations');
+  if(!container) return;
+  container.innerHTML='<div style="text-align:center;padding:20px;color:#888;font-size:13px">⏳ جاري تحميل المحادثات...</div>';
+  // جلب كل threads تخص المستخدم الحالي
+  try{
+    const allThreads=await fbGet('/chats');
+    if(!allThreads){
+      container.innerHTML='<div style="text-align:center;color:var(--g400);padding:30px;font-size:13px"><div style="font-size:36px;margin-bottom:8px">💬</div>لا توجد محادثات بعد</div>';
+      return;
+    }
+    // فلتر: threads تحتوي على id المستخدم الحالي
+    const myThreads=Object.entries(allThreads).filter(([tid])=>tid.includes(currentUser.id));
+    if(!myThreads.length){
+      container.innerHTML='<div style="text-align:center;color:var(--g400);padding:30px;font-size:13px"><div style="font-size:36px;margin-bottom:8px">💬</div>لا توجد محادثات بعد</div>';
+      return;
+    }
+    let html='<div style="font-size:13px;font-weight:800;margin-bottom:10px;color:#333">💬 محادثاتي</div>';
+    for(const [tid, thread] of myThreads){
+      if(!thread || !thread.messages) continue;
+      const msgs=Object.values(thread.messages);
+      const last=msgs[msgs.length-1];
+      const withId=tid.replace(currentUser.id,'').replace('__','');
+      const withName=thread.participants?.[withId]||withId;
+      const lastMsg=last?.text||'...';
+      const unread=msgs.filter(m=>m.from!==currentUser.id && !m.read).length;
+      html+=`<div onclick="openChatThread('${tid}','${withId}','${withName}')" style="background:#fff;border-radius:12px;padding:14px;margin-bottom:10px;box-shadow:0 2px 8px rgba(0,0,0,.06);cursor:pointer;display:flex;align-items:center;gap:10px">
+        <div style="width:44px;height:44px;border-radius:50%;background:#e8f5e9;display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0">
+          ${thread.participantRoles?.[withId]==='driver'?'🛵':thread.participantRoles?.[withId]==='seller'?'🏪':'👤'}
+        </div>
+        <div style="flex:1;min-width:0">
+          <div style="font-size:13px;font-weight:800;color:#333">${withName}</div>
+          <div style="font-size:11px;color:#888;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${lastMsg}</div>
+        </div>
+        ${unread>0?`<div style="background:#16A34A;color:#fff;border-radius:50%;width:20px;height:20px;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:800">${unread}</div>`:''}
+      </div>`;
+    }
+    container.innerHTML=html;
+  }catch(e){
+    container.innerHTML='<div style="text-align:center;color:red;padding:20px;font-size:12px">❌ خطأ في تحميل المحادثات</div>';
+  }
+}
+
+async function openChatThread(threadId, withUserId, withName){
+  _chatCurrentThread={threadId, withUserId, withName};
+  document.getElementById('d-chat-conversations').style.display='none';
+  document.getElementById('d-chat-window').style.display='block';
+  const nameEl=document.getElementById('d-chat-with-name');
+  if(nameEl) nameEl.textContent='💬 '+withName;
+  await loadChatMessages(threadId);
+}
+
+async function loadChatMessages(threadId){
+  const container=document.getElementById('d-chat-messages');
+  if(!container) return;
+  container.innerHTML='<div style="text-align:center;padding:10px;color:#888;font-size:12px">⏳ جاري التحميل...</div>';
+  try{
+    const thread=await fbGet('/chats/'+threadId);
+    if(!thread || !thread.messages){
+      container.innerHTML='<div style="text-align:center;color:#888;font-size:12px;padding:20px">ابدأ المحادثة الآن 👋</div>';
+      return;
+    }
+    const msgs=Object.values(thread.messages).sort((a,b)=>(a.ts||0)-(b.ts||0));
+    // تعليم الرسائل كمقروءة
+    const updates={};
+    msgs.forEach(m=>{ if(m.from!==currentUser?.id && !m.read && m.id) updates[`/chats/${threadId}/messages/${m.id}/read`]=true; });
+    if(Object.keys(updates).length){ fbPatch('',updates).catch(()=>{}); }
+    container.innerHTML=msgs.map(m=>{
+      const isMine=m.from===currentUser?.id;
+      return `<div style="display:flex;justify-content:${isMine?'flex-end':'flex-start'};margin-bottom:8px">
+        <div style="max-width:75%;background:${isMine?'#16A34A':'#fff'};color:${isMine?'#fff':'#333'};border-radius:${isMine?'16px 4px 16px 16px':'4px 16px 16px 16px'};padding:10px 14px;font-size:12px;box-shadow:0 1px 4px rgba(0,0,0,.08)">
+          <div>${m.text}</div>
+          <div style="font-size:9px;opacity:.6;margin-top:3px;text-align:${isMine?'left':'right'}">${m.senderName||''}</div>
+        </div>
+      </div>`;
+    }).join('');
+    container.scrollTop=container.scrollHeight;
+  }catch(e){
+    container.innerHTML='<div style="color:red;text-align:center;font-size:12px">❌ خطأ في التحميل</div>';
+  }
+}
+
+async function sendDriverChatMsg(){
+  if(!currentUser || !_chatCurrentThread) return;
+  const input=document.getElementById('d-chat-input');
+  const text=(input?.value||'').trim();
+  if(!text) return;
+  input.value='';
+  const msgId='msg_'+Date.now()+'_'+Math.random().toString(36).substr(2,4);
+  const msg={ id:msgId, from:currentUser.id, senderName:currentUser.name||'سائق', text, ts:Date.now(), read:false };
+  const {threadId, withUserId, withName}=_chatCurrentThread;
+  // حفظ المشاركين
+  const participantsUpdate={};
+  participantsUpdate[`/chats/${threadId}/participants/${currentUser.id}`]=currentUser.name||'سائق';
+  participantsUpdate[`/chats/${threadId}/participants/${withUserId}`]=withName;
+  participantsUpdate[`/chats/${threadId}/participantRoles/${currentUser.id}`]=currentUser.role||'driver';
+  participantsUpdate[`/chats/${threadId}/messages/${msgId}`]=msg;
+  await fbPatch('', participantsUpdate);
+  await loadChatMessages(threadId);
+}
+
+// ==================== شات للمستخدم العادي (زر في صفحة الطلب) ====================
+async function openChatWithDriver(driverId, driverName){
+  if(!currentUser){ showToast('سجل دخولك أولاً','red'); return; }
+  const threadId=chatThreadId(currentUser.id, driverId);
+  showChatModal(threadId, driverId, driverName);
+}
+
+async function openChatWithSeller(sellerId, sellerName){
+  if(!currentUser){ showToast('سجل دخولك أولاً','red'); return; }
+  const threadId=chatThreadId(currentUser.id, sellerId);
+  showChatModal(threadId, sellerId, sellerName);
+}
+
+let _modalChatThread=null;
+
+function showChatModal(threadId, withId, withName){
+  _modalChatThread={threadId, withId, withName};
+  let modal=document.getElementById('chat-modal');
+  if(!modal){
+    modal=document.createElement('div');
+    modal.id='chat-modal';
+    modal.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9999;display:flex;align-items:flex-end;justify-content:center';
+    modal.innerHTML=`
+      <div style="background:#fff;border-radius:20px 20px 0 0;width:100%;max-width:480px;padding:16px;padding-bottom:30px;max-height:80vh;display:flex;flex-direction:column">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+          <div id="chat-modal-title" style="font-size:14px;font-weight:800;color:#333"></div>
+          <button onclick="document.getElementById('chat-modal').style.display='none'" style="background:#f0f0f0;border:none;border-radius:8px;padding:8px 12px;font-family:'Cairo',sans-serif;font-weight:700;cursor:pointer">✕</button>
+        </div>
+        <div id="chat-modal-messages" style="flex:1;background:#f9f9f9;border-radius:12px;padding:12px;overflow-y:auto;min-height:200px;max-height:380px;margin-bottom:10px"></div>
+        <div style="display:flex;gap:8px">
+          <input id="chat-modal-input" class="inp" placeholder="اكتب رسالة..." style="flex:1" onkeydown="if(event.key==='Enter')sendModalChat()">
+          <button onclick="sendModalChat()" style="padding:10px 18px;background:#16A34A;color:#fff;border:none;border-radius:10px;font-family:'Cairo',sans-serif;font-size:16px;font-weight:800;cursor:pointer">➤</button>
+        </div>
+      </div>`;
+    document.body.appendChild(modal);
+  }
+  modal.style.display='flex';
+  const titleEl=document.getElementById('chat-modal-title');
+  if(titleEl) titleEl.textContent='💬 '+withName;
+  loadModalChatMessages(threadId);
+}
+
+async function loadModalChatMessages(threadId){
+  const container=document.getElementById('chat-modal-messages');
+  if(!container) return;
+  container.innerHTML='<div style="text-align:center;padding:10px;color:#888;font-size:12px">⏳ جاري التحميل...</div>';
+  try{
+    const thread=await fbGet('/chats/'+threadId);
+    if(!thread || !thread.messages){
+      container.innerHTML='<div style="text-align:center;color:#888;font-size:12px;padding:20px">ابدأ المحادثة الآن 👋</div>';
+      return;
+    }
+    const msgs=Object.values(thread.messages).sort((a,b)=>(a.ts||0)-(b.ts||0));
+    container.innerHTML=msgs.map(m=>{
+      const isMine=m.from===currentUser?.id;
+      return `<div style="display:flex;justify-content:${isMine?'flex-end':'flex-start'};margin-bottom:8px">
+        <div style="max-width:75%;background:${isMine?'#16A34A':'#fff'};color:${isMine?'#fff':'#333'};border-radius:${isMine?'16px 4px 16px 16px':'4px 16px 16px 16px'};padding:10px 14px;font-size:12px;box-shadow:0 1px 4px rgba(0,0,0,.08)">
+          <div>${m.text}</div>
+          <div style="font-size:9px;opacity:.6;margin-top:3px">${m.senderName||''}</div>
+        </div>
+      </div>`;
+    }).join('');
+    container.scrollTop=container.scrollHeight;
+  }catch(e){}
+}
+
+async function sendModalChat(){
+  if(!currentUser || !_modalChatThread) return;
+  const input=document.getElementById('chat-modal-input');
+  const text=(input?.value||'').trim();
+  if(!text) return;
+  input.value='';
+  const {threadId, withId, withName}=_modalChatThread;
+  const msgId='msg_'+Date.now()+'_'+Math.random().toString(36).substr(2,4);
+  const msg={ id:msgId, from:currentUser.id, senderName:currentUser.name||currentUser.email, text, ts:Date.now(), read:false };
+  const updates={};
+  updates[`/chats/${threadId}/participants/${currentUser.id}`]=currentUser.name||currentUser.email;
+  updates[`/chats/${threadId}/participants/${withId}`]=withName;
+  updates[`/chats/${threadId}/participantRoles/${currentUser.id}`]=currentUser.role||'user';
+  updates[`/chats/${threadId}/messages/${msgId}`]=msg;
+  await fbPatch('', updates);
+  await loadModalChatMessages(threadId);
+}
+
+// ==================== تحديث enterDriverDashboard لتحميل البروفايل ====================
+const _origEnterDriverDashboard = typeof enterDriverDashboard==='function' ? enterDriverDashboard : null;
+function enterDriverDashboard(){
+  if(_origEnterDriverDashboard) _origEnterDriverDashboard();
+  // تحميل بيانات البروفايل
+  setTimeout(loadDriverProfile, 300);
+}
+</script>
 </body>
 </html>
